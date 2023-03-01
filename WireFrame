@@ -1,0 +1,90 @@
+echo "# SampleTokenizePersonalLoanCordaDLT" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/iantstaley/SampleTokenizePersonalLoanCordaDLT.git
+git push -u origin main
+// Define the NFT contract state
+class PersonalLoanState(val lender: Party,
+                        val borrower: Party,
+                        val amount: Amount<Currency>,
+                        override val linearId: UniqueIdentifier) : LinearState, QueryableState {
+    override val participants: List<AbstractParty> = listOf(lender, borrower)
+    override fun generateMappedObject(schema: MappedSchema): PersistentState {
+        return when (schema) {
+            is PersonalLoanSchema -> PersonalLoanSchema.PersistentPersonalLoan(
+                    this.lender.name.toString(),
+                    this.borrower.name.toString(),
+                    this.amount.quantity,
+                    this.amount.token.currencyCode,
+                    this.linearId.id
+            )
+            else -> throw IllegalArgumentException("Unrecognised schema $schema")
+        }
+    }
+
+    override fun supportedSchemas(): Iterable<MappedSchema> = listOf(PersonalLoanSchema)
+}
+
+// Define the NFT contract
+class PersonalLoanContract : Contract {
+    companion object {
+        const val CONTRACT_ID = "com.example.contracts.PersonalLoanContract"
+    }
+
+    // Define contract commands
+    interface Commands : CommandData {
+        class Issue : TypeOnlyCommandData(), Commands
+        class Transfer : TypeOnlyCommandData(), Commands
+        class Settle : TypeOnlyCommandData(), Commands
+    }
+
+    // Define the contract verification logic
+    override fun verify(tx: LedgerTransaction) {
+        val command = tx.commands.requireSingleCommand<Commands>()
+
+        // Issue command logic
+        if (command.value is Commands.Issue) {
+            requireThat {
+                "No inputs should be consumed when issuing a loan." using (tx.inputs.isEmpty())
+                "Only one output state should be created when issuing a loan." using (tx.outputs.size == 1)
+
+                val output = tx.outputsOfType<PersonalLoanState>().single()
+                "The lender and borrower cannot be the same entity." using (output.lender != output.borrower)
+                "The loan amount must be positive." using (output.amount.quantity > 0)
+                "The loan amount currency must be a valid currency code." using (Currency.getInstance(output.amount.token.currencyCode) != null)
+            }
+        }
+
+        // Transfer command logic
+        if (command.value is Commands.Transfer) {
+            requireThat {
+                "Only one input state should be consumed when transferring a loan." using (tx.inputs.size == 1)
+                "Only one output state should be created when transferring a loan." using (tx.outputs.size == 1)
+
+                val input = tx.inputsOfType<PersonalLoanState>().single()
+                val output = tx.outputsOfType<PersonalLoanState>().single()
+                "The lender and borrower cannot be changed when transferring a loan." using (input.lender == output.lender && input.borrower == output.borrower)
+                "The loan amount cannot be changed when transferring a loan." using (input.amount == output.amount)
+            }
+        }
+
+        // Settle command logic
+        if (command.value is Commands.Settle) {
+            requireThat {
+                "Only one input state should be consumed when settling a loan." using (tx.inputs.size == 1)
+                "No output states should be created when settling a loan." using (tx.outputs.isEmpty())
+
+                val input = tx.inputsOfType<PersonalLoanState>().single()
+                "The loan amount must be fully settled." using (input.amount.quantity == 0L)
+            }
+        }
+    }
+}
+
+// Define the NFT contract schema
+object PersonalLoanSchema : MappedSchema(
+        schemaFamily = PersonalLoanSchema::class.java,
+        version = 1,
+        mappedTypes
